@@ -125,6 +125,10 @@ input,textarea,select{background:#fffcfb;border-color:#eac8d7}
  .topbar{border-bottom:1px solid #efcada;padding-bottom:14px}
 }
 
+
+/* Connected Apps interface */
+#views .card .field input[type=file]{background:#fff1f7;color:#803b61;border:1px dashed #ce8cab;cursor:pointer}
+#views .card .field input[type=file]::file-selector-button{background:#ad477b;color:white;border:0;border-radius:9px;padding:8px 12px;margin-right:9px;cursor:pointer}
 </style></head><body>
 <div class="shell"><aside class="sidebar"><div class="brand"><div class="small">THE PERSONAL EDITION</div><h1>Daniela's <em>HQ.</em></h1><p>Hamburg · your life, beautifully organized</p></div><nav class="nav" id="sideNav"></nav><div class="sidebar-bottom">✦ Made for your soft life & ambitious plans.<br><span id="saveStatus">Saved on this device</span></div></aside><main class="page"><div class="topbar"><div><div class="eyebrow" id="dateLine"></div><h2 class="headline" id="pageTitle">Your home base.</h2><div class="sub" id="pageSubtitle">A little clarity for everything you're building.</div></div><div class="top-actions"><button class="btn pink" onclick="openSync()" id="syncButton">☁ Cloud sync</button><button class="btn" onclick="exportData()">↗ Backup</button><button class="btn" onclick="document.getElementById('importFile').click()">↙ Restore</button><input style="display:none" type="file" id="importFile" accept=".json,application/json" onchange="importData(event)"></div></div><div id="views"></div></main></div><nav class="bottomnav" id="bottomNav"></nav><div id="toast" class="toast"></div>
 <div id="syncOverlay" class="sync-overlay" role="dialog" aria-modal="true" aria-labelledby="syncTitle" hidden>
@@ -207,6 +211,149 @@ async function cloudPoll(manual=false){if(!cloudSession||!cloudReady||cloudBusy|
 async function cloudLogout(){if(!confirm('Sign out of cloud sync on this device? Local data will stay here.'))return;clearTimeout(cloudTimer);cloudSession=null;cloudReady=false;cloudDirty=false;sessionStore();cloudStatus('Signed out. Your device copy is still available.');showCloudState()}
 async function cloudInit(){try{cloudConfig=JSON.parse(localStorage.getItem(CLOUD_CONFIG_KEY)||'null')||PRESET_CLOUD_CONFIG;cloudSession=JSON.parse(sessionStorage.getItem(CLOUD_SESSION_KEY)||'null');if(cloudConfig&&cloudSession){cloudStatus('Cloud account found. Choose how to reconcile this device with your cloud copy.');await cloudAfterLogin()}}catch(e){cloudStatus('Local dashboard ready. Cloud setup can be configured here.')}showCloudState()}
 window.addEventListener('focus',()=>cloudPoll());document.addEventListener('visibilitychange',()=>{if(!document.hidden)cloudPoll()});setInterval(()=>{if(!document.hidden)cloudPoll()},30000);
+
+
+/* --- Connected apps: read-only, opt-in --- */
+const CONNECT_KEY='danielas-hq-connected-apps-v1';
+let gmailToken=null,gmailRows=[],gmailInfo='Not connected',gmailBusy=false;
+let appMessage='';
+let linkedConfig;try{linkedConfig=JSON.parse(localStorage.getItem(CONNECT_KEY)||'{}')}catch(e){linkedConfig={}}
+function saveLinkedConfig(){try{localStorage.setItem(CONNECT_KEY,JSON.stringify(linkedConfig))}catch(e){}}
+const appData=()=>{if(!state.externalSources)state.externalSources={calendar:[],reminders:[],calendarImportedAt:'',remindersImportedAt:''};return state.externalSources};
+function connectedNotice(msg){appMessage=msg;render()}
+function displayEventDate(date){const d=new Date(date);return isNaN(+d)?'Date unknown':d.toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}
+function upcomingEvents(){return (appData().calendar||[]).filter(e=>new Date(e.start).getTime()>=Date.now()-3600000).sort((a,b)=>new Date(a.start)-new Date(b.start)).slice(0,5)}
+function homeConnected(){const ev=upcomingEvents(),rem=(appData().reminders||[]).filter(r=>!r.done).slice(0,5);return '<div class="grid" style="margin-top:14px">'+card('Upcoming calendar events',ev.length?'<div class="stack">'+ev.map(e=>'<div class="item"><div class="grow"><strong>'+esc(e.title)+'</strong><div class="tiny">'+esc(displayEventDate(e.start))+'</div></div></div>').join('')+'</div>':'<p class="caption">No future events imported yet.</p>','four')+card('Apple Reminders snapshot',rem.length?'<div class="stack">'+rem.map(e=>'<div class="item"><span>◌</span><div class="grow"><strong>'+esc(e.title)+'</strong><div class="tiny">'+esc(e.due||'No due date')+'</div></div></div>').join('')+'</div>':'<p class="caption">No imported reminders yet.</p>','four')+card('Inbox status','<p class="sub">'+esc(gmailInfo)+'</p><button class="btn pink" onclick="navTo(\'integrations\')">Connected Apps →</button>','four')+'</div>'}
+const baseHome=renderHome;
+renderHome=function(){return baseHome()+homeConnected()}
+nav.push(['integrations','♡','Connected Apps','Apple Calendar, Reminders and Gmail — read only']);
+const baseRender=render;
+render=function(){
+ if(active==='integrations'){
+  renderNav();
+  document.getElementById('pageTitle').textContent='Connected apps.';
+  document.getElementById('pageSubtitle').textContent='Bring your calendar, reminders and email into one calm overview.';
+  document.getElementById('dateLine').textContent='YOUR PERSONAL CONNECTIONS';
+  document.getElementById('views').innerHTML=renderIntegrations();
+ }else baseRender()
+}
+function renderIntegrations(){
+ const a=appData(), e=a.calendar||[],re=a.reminders||[];
+ return '<div class="grid">'+
+ card('Apple Calendar · read-only snapshot',
+  '<p class="sub">Import an .ics calendar export from Apple Calendar. This copies event summaries into HQ; it does not change Apple Calendar or refresh automatically.</p>'+
+  '<label class="field">Choose an .ics file<input type="file" accept=".ics,text/calendar" onchange="importCalendarICS(event)"></label>'+
+  '<p class="caption">'+e.length+' events loaded'+(a.calendarImportedAt?' · updated '+esc(a.calendarImportedAt):'')+'. Note: imported events are included in your HQ cloud sync and backups.</p>'+
+  '<button class="btn" onclick="clearCalendarSnapshot()">Clear imported events</button>','six')+
+ card('Apple Reminders · read-only snapshot',
+  '<p class="sub">Import a JSON or CSV file from an Apple Shortcut or your own export. CSV columns: title, due, completed. JSON can be a list of reminder objects.</p>'+
+  '<label class="field">Choose a .json or .csv file<input type="file" accept=".json,.csv,application/json,text/csv" onchange="importRemindersFile(event)"></label>'+
+  '<p class="caption">'+re.length+' reminders loaded'+(a.remindersImportedAt?' · updated '+esc(a.remindersImportedAt):'')+'. Changes in Apple Reminders are not automatically reflected here.</p>'+
+  '<button class="btn" onclick="clearReminderSnapshot()">Clear imported reminders</button>','six')+
+ card('Gmail · live read-only inbox',
+ '<p class="sub">Connect directly with Google using Gmail read-only permissions. HQ can show recent email subjects and snippets but cannot send, delete, or edit messages.</p>'+
+ '<p class="caption">Google requires an OAuth web client ID with <strong>https://contactdanielafeen-hash.github.io</strong> listed as an authorized JavaScript origin. Your ChatGPT Gmail connection cannot automatically authorize this separate website.</p>'+
+ '<label class="field">Google OAuth web client ID<input id="gmailClientId" autocomplete="off" spellcheck="false" placeholder="…apps.googleusercontent.com" value="'+esc(linkedConfig.gmailClientId||'')+'"></label>'+
+ '<div class="row" style="flex-wrap:wrap"><button class="btn primary" onclick="gmailConnect()">Connect Gmail (read only)</button><button class="btn" onclick="gmailLoad()">Refresh inbox</button><button class="btn ghost" onclick="gmailDisconnect()">Disconnect</button></div>'+
+ '<p class="caption" id="gmailStatus">'+esc(gmailInfo)+'</p>'+
+ (gmailRows.length?'<div class="stack">'+gmailRows.map(m=>'<div class="item"><div class="grow"><strong>'+esc(m.subject||'(no subject)')+'</strong><div class="tiny">'+esc(m.from||'')+'</div><p class="caption">'+esc(m.snippet||'')+'</p></div></div>').join('')+'</div>':'<div class="empty">Recent Gmail messages will appear here after authorization.</div>'),
+ 'full')+
+ card('Connection overview',
+ '<div class="note">All integrations are optional. Apple imports are snapshots saved with your dashboard. Gmail is read directly from Google when you authorize it; email contents are not written to the HQ cloud database. For privacy, avoid making a personal iCloud calendar public just to connect it.</div>'+
+ (appMessage?'<p class="sub">'+esc(appMessage)+'</p>':'')+
+ '<p class="caption">For a continuously synced Apple Calendar or Apple Reminders connection, a separate Apple-device companion or credentialed server connector is required.</p>','full')
+ +'</div>'
+}
+function unfoldICS(text){return text.replace(/\r\n[ \t]/g,'').replace(/\n[ \t]/g,'').replace(/\r\n/g,'\n')}
+function icsDate(s){
+ if(!s)return '';
+ const v=s.trim();
+ if(/^\d{8}$/.test(v))return v.slice(0,4)+'-'+v.slice(4,6)+'-'+v.slice(6,8)+'T12:00:00';
+ if(/^\d{8}T\d{6}Z?$/.test(v))return v.slice(0,4)+'-'+v.slice(4,6)+'-'+v.slice(6,8)+'T'+v.slice(9,11)+':'+v.slice(11,13)+':'+v.slice(13,15)+(v.endsWith('Z')?'Z':'');
+ return ''
+}
+function decodeICSText(v){return String(v||'').replace(/\\n/gi,' ').replace(/\\,/g,',').replace(/\\;/g,';').replace(/\\\\/g,'\\')}
+function parseICS(text){
+ const chunks=unfoldICS(text).split('BEGIN:VEVENT').slice(1);
+ return chunks.slice(0,2500).map(s=>{
+  const body=s.split('END:VEVENT')[0],lines=body.split('\n');
+  const find=(k)=>{let p=lines.find(x=>x.startsWith(k+':')||x.startsWith(k+';'));return p?p.slice(p.indexOf(':')+1).trim():''};
+  return {id:find('UID')||uid(),title:decodeICSText(find('SUMMARY'))||'Untitled event',start:icsDate(find('DTSTART')),end:icsDate(find('DTEND')),location:decodeICSText(find('LOCATION'))};
+ }).filter(e=>e.start)
+}
+async function importCalendarICS(event){
+ const file=event.target.files?.[0];if(!file)return;
+ if(file.size>5_000_000){connectedNotice('Calendar file too large (5 MB max).');return}
+ try{
+  const txt=await file.text();if(!txt.includes('BEGIN:VCALENDAR'))throw Error('Not a calendar file');
+  const items=parseICS(txt);if(!items.length)throw Error('No dated events found');
+  if(!confirm('Import '+items.length+' events? These summaries will be included in HQ cloud sync and backups. Existing imported events will be replaced.'))return;
+  appData().calendar=items;appData().calendarImportedAt=new Date().toLocaleString();persist();connectedNotice('Imported '+items.length+' calendar events. Recurring rules and timezone details may require checking in Apple Calendar.');
+ }catch(e){connectedNotice('Calendar import failed: '+e.message)}
+}
+function parseCSV(str){
+ const rows=[],lines=str.replace(/^\uFEFF/,'').split(/\r?\n/).filter(x=>x.trim());
+ let parseLine=s=>{let a=[],val='',quoted=false;for(let i=0;i<s.length;i++){let c=s[i];if(c==='"'){if(quoted&&s[i+1]==='"'){val+='"';i++}else quoted=!quoted}else if(c===','&&!quoted){a.push(val);val=''}else val+=c}a.push(val);return a};
+ if(lines.length<2)return [];
+ const hd=parseLine(lines[0]).map(x=>x.toLowerCase().trim());
+ for(const l of lines.slice(1,1001)){let v=parseLine(l),obj={};hd.forEach((k,i)=>obj[k]=v[i]||'');rows.push(obj)}
+ return rows
+}
+async function importRemindersFile(event){
+ const f=event.target.files?.[0];if(!f)return;if(f.size>2_000_000){connectedNotice('Reminder file too large (2 MB max).');return}
+ try{
+  const raw=await f.text();
+  const p=f.name.toLowerCase().endsWith('.json')?JSON.parse(raw):parseCSV(raw);
+  const arr=Array.isArray(p)?p:(p.reminders||p.items||[]);
+  if(!Array.isArray(arr))throw Error('Expected a list of reminders');
+  const rows=arr.slice(0,1000).map((x,i)=>({id:uid(),title:String(x.title||x.name||x.text||'').slice(0,300),due:String(x.due||x.dueDate||x.date||'').slice(0,80),done:[true,'true','yes','1','completed'].includes(x.completed)||x.done===true})).filter(x=>x.title);
+  if(!rows.length)throw Error('No reminder titles found');
+  if(!confirm('Import '+rows.length+' reminders as a read-only snapshot? This will replace earlier imported reminders.'))return;
+  appData().reminders=rows;appData().remindersImportedAt=new Date().toLocaleString();persist();connectedNotice('Imported '+rows.length+' reminders. Your original Apple Reminders stay untouched.');
+ }catch(e){connectedNotice('Reminders import failed: '+e.message)}
+}
+function clearCalendarSnapshot(){if(confirm('Clear imported events from HQ? This will not affect Apple Calendar.')){appData().calendar=[];persist();render()}}
+function clearReminderSnapshot(){if(confirm('Clear imported reminders from HQ? This will not affect Apple Reminders.')){appData().reminders=[];persist();render()}}
+function gmailDisplayStatus(t){gmailInfo=t;const el=document.getElementById('gmailStatus');if(el)el.textContent=t;}
+function loadGoogleGIS(){
+ if(window.google?.accounts?.oauth2)return Promise.resolve();
+ return new Promise((ok,bad)=>{
+  let script=document.createElement('script');script.src='https://accounts.google.com/gsi/client';script.async=true;script.onload=ok;script.onerror=()=>bad(Error('Google login script could not load'));document.head.appendChild(script)
+ })
+}
+async function gmailConnect(){
+ if(gmailBusy)return;
+ const id=(document.getElementById('gmailClientId')?.value||'').trim();
+ if(!/^[0-9]+-[a-z0-9_-]+\.apps\.googleusercontent\.com$/i.test(id)){gmailDisplayStatus('Enter a valid Google OAuth web client ID first.');return}
+ linkedConfig.gmailClientId=id;saveLinkedConfig();
+ gmailBusy=true;gmailDisplayStatus('Opening Google authorization…');
+ try{
+  await loadGoogleGIS();
+  const client=google.accounts.oauth2.initTokenClient({
+   client_id:id,scope:'https://www.googleapis.com/auth/gmail.readonly',
+   callback:async (response)=>{gmailBusy=false;if(response.error){gmailDisplayStatus('Google authorization failed: '+response.error);return}gmailToken=response.access_token;gmailDisplayStatus('Gmail connected for this session. Loading…');await gmailLoad()}
+  });
+  client.requestAccessToken({prompt:'consent'})
+ }catch(e){gmailBusy=false;gmailDisplayStatus(e.message)}
+}
+async function gmailLoad(){
+ if(!gmailToken){gmailDisplayStatus('Connect with Google first.');return}
+ gmailDisplayStatus('Loading recent inbox messages…');
+ try{
+  const headers={Authorization:'Bearer '+gmailToken};
+  const list=await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=8&labelIds=INBOX',{headers});
+  if(!list.ok)throw Error('Google API returned '+list.status);
+  const ids=(await list.json()).messages||[];
+  gmailRows=await Promise.all(ids.map(async x=>{
+   const res=await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/'+encodeURIComponent(x.id)+'?format=metadata&metadataHeaders=Subject&metadataHeaders=From',{headers});
+   if(!res.ok)return {subject:'Could not load message'};
+   const data=await res.json(),h=data.payload?.headers||[],get=n=>h.find(k=>k.name?.toLowerCase()===n)?.value||'';
+   return {subject:get('subject'),from:get('from'),snippet:data.snippet||''}
+  }));
+  gmailDisplayStatus('Read-only Gmail connected · '+gmailRows.length+' recent inbox messages loaded');render()
+ }catch(e){gmailDisplayStatus('Gmail could not load: '+e.message)}
+}
+function gmailDisconnect(){if(gmailToken&&window.google?.accounts?.oauth2)google.accounts.oauth2.revoke(gmailToken,()=>{});gmailToken=null;gmailRows=[];gmailInfo='Disconnected';render()}
 
 render();persist();cloudInit();
 </script></body></html>
